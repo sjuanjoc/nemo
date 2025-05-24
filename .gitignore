@@ -1,0 +1,20 @@
+# Python
+*.pyc
+__pycache__/
+venv/
+
+# React
+node_modules/
+build/
+
+# Claves y secretos
+.env
+*.enc
+
+# Logs y temporales
+*.log
+*.tmp
+
+# Sistema
+.DS_Store
+Thumbs.db
