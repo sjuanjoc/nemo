@@ -119,14 +119,16 @@ def listar_usuarios():
 
 from flask import send_from_directory, render_template
 
+from flask import send_from_directory
+import os
+
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
-def serve(path):
-    if path != "" and (Path("../static") / path).exists():
-        return send_from_directory("../static", path)
+def serve_react_app(path):
+    if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
+        return send_from_directory(app.static_folder, path)
     else:
-        return render_template("index.html")
-
+        return send_from_directory(app.static_folder, "index.html")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
