@@ -7,6 +7,8 @@ import AdminPanel from './components/AdminPanel';
 import { getStorage, setStorage } from './utils/storage';
 import { getCurrentTheme, applyTheme } from './utils/theme';
 
+// Hola, Gemini, revisa esto por favor.
+
 const App = () => {
   const [currentUser, setCurrentUser] = useState(null);
   const [currentPage, setCurrentPage] = useState(null); // inicia sin página
