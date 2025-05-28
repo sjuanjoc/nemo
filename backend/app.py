@@ -1,11 +1,15 @@
-import os, json, requests
+import os
+import json
+import requests
+import random
+import string
 from datetime import datetime
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, send_from_directory, render_template
 from flask_cors import CORS
-from TTS.api import TTS
 from pathlib import Path
+from TTS.api import TTS
 from dotenv import load_dotenv
-load_dotenv(dotenv_path="../nemo_secrets.env")
+
 
 
 app = Flask(__name__, static_folder="../static", template_folder="../templates")
@@ -30,10 +34,9 @@ def validar():
         return jsonify({"error": "Faltan datos"}), 400
 
     try:
-        r = requests.get("https://nemo.sjuanjoc.com/codigos.json")
-        if r.status_code != 200:
-            return jsonify({"error": "No se pudo obtener codigos.json desde el servidor"}), 500
-        codigos = r.json()
+    with open(codigos_path, 'r', encoding='utf-8') as f:
+        codigos = json.load(f)
+
     except Exception as e:
         return jsonify({"error": f"Error al descargar codigos.json: {str(e)}"}), 500
 
@@ -117,18 +120,55 @@ def listar_usuarios():
             })
     return jsonify(lista)
 
-from flask import send_from_directory, render_template
-
-from flask import send_from_directory
-import os
 
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
 def serve_react_app(path):
-    if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
-        return send_from_directory(app.static_folder, path)
-    else:
-        return send_from_directory(app.static_folder, "index.html")
+    return render_template("index.html")
+
+
+@app.route('/api/nuevo_codigo', methods=['POST'])
+def nuevo_codigo():
+    # Generar un código aleatorio de 8 caracteres
+    codigo = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+
+    # Leer el archivo codigos.json
+    with open('codigos.json', 'r') as f:
+        codigos = json.load(f)
+
+    # Agregar el nuevo código como libre
+    codigos.append({"codigo": codigo, "estado": "libre"})
+
+    # Guardar el archivo actualizado
+    with open('codigos.json', 'w') as f:
+        json.dump(codigos, f)
+
+    return {"codigo": codigo}
+
+@app.route('/api/codigos', methods=['GET'])
+def codigos():
+    with open('codigos.json', 'r') as f:
+        codigos = json.load(f)
+    return {"codigos": codigos}
+
+@app.route('/api/actualizar_codigo', methods=['POST'])
+def actualizar_codigo():
+    data = request.get_json()
+    codigo_actualizar = data.get("codigo")
+    nuevo_estado = data.get("estado")  # "usado", "libre", etc.
+
+    with open('codigos.json', 'r') as f:
+        codigos = json.load(f)
+
+    for codigo in codigos:
+        if codigo["codigo"] == codigo_actualizar:
+            codigo["estado"] = nuevo_estado
+            break
+
+    with open('codigos.json', 'w', encoding='utf-8') as f:
+        json.dump(codigos, f, indent=2, ensure_ascii=False)
+
+    return {"mensaje": "Estado actualizado"}
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
