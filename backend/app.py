@@ -1,175 +1,182 @@
-// Hola, Gemini, revisa esto por favor.
 import os
 import json
-import requests
 import random
 import string
 from datetime import datetime
-from flask import Flask, request, jsonify, send_file, send_from_directory, render_template
+from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
 from pathlib import Path
 from TTS.api import TTS
 from dotenv import load_dotenv
 
-
-
 app = Flask(__name__, static_folder="../static", template_folder="../templates")
-
 CORS(app)
 
 SECRET = os.environ.get("ADMIN_PASSWORD")
 tts = TTS(model_name="tts_models/es/mai/tacotron2-DDC", progress_bar=False, gpu=False)
 
-codigos_path = Path(__file__).parent.parent / "codigos.json"
+codigos_path = Path(__file__).parent / "codigos.json"
+usuarios_path = Path(__file__).parent / "usuarios.json"
 
-@app.route("/validar", methods=["POST"])
-def validar():
-    if request.headers.get("X-NEMO-TOKEN") != SECRET:
-        return jsonify({"error": "Token inválido"}), 403
-
-    data = request.get_json()
-    nombre = data.get("nombre", "").strip()
-    codigo = data.get("codigo", "").strip()
-
-    if not nombre or not codigo:
-        return jsonify({"error": "Faltan datos"}), 400
-
-    try:
-    with open(codigos_path, 'r', encoding='utf-8') as f:
-        codigos = json.load(f)
-
-    except Exception as e:
-        return jsonify({"error": f"Error al descargar codigos.json: {str(e)}"}), 500
-
-    if codigo not in codigos:
-        return jsonify({"error": "Código inválido"}), 400
-
-    if codigos[codigo] and codigos[codigo] != nombre:
-        return jsonify({"error": "Código ya usado por otro usuario"}), 400
-
-    codigos[codigo] = nombre
-    json.dump(codigos, open(codigos_path, "w", encoding="utf-8"), indent=2)
-
-    return jsonify({"ok": True})
-
-
-@app.route("/procesar", methods=["POST"])
-def procesar():
-    if request.headers.get("X-NEMO-TOKEN") != SECRET:
-        return jsonify({"error": "Token inválido"}), 403
-
-    data = request.get_json()
-    texto = data.get("texto", "").strip()
-    usuario = data.get("usuario", "").strip()
-
-    if not texto or not usuario:
-        return jsonify({"error": "Faltan datos"}), 400
-
-    respuesta = f"Hola {usuario}, escuché que dijiste: {texto}"
-
-    fecha = datetime.now().strftime("%Y-%m-%d")
-    carpeta_usuario = Path(f"data/usuarios/{usuario}")
-    diarios_dir = carpeta_usuario / "diarios"
-    audios_dir = carpeta_usuario / "audios" / fecha
-    diarios_dir.mkdir(parents=True, exist_ok=True)
-    audios_dir.mkdir(parents=True, exist_ok=True)
-
-    ruta_diario = diarios_dir / f"{fecha}.jsonl"
-    with open(ruta_diario, "a", encoding="utf-8") as f:
-        f.write(json.dumps({
-            "hora": datetime.now().strftime("%H:%M:%S"),
-            "input": texto,
-            "output": respuesta
-        }) + "\n")
-
-    nombre_archivo = f"{usuario}_{int(datetime.now().timestamp())}.wav"
-    ruta_audio = audios_dir / nombre_archivo
-    tts.tts_to_file(text=respuesta, file_path=ruta_audio)
-
-    return jsonify({
-        "respuesta": respuesta,
-        "audio": f"/audio/{usuario}/{fecha}/{nombre_archivo}"
-    })
-
-
-@app.route("/audio/<usuario>/<fecha>/<nombre>")
-def serve_audio(usuario, fecha, nombre):
-    path = Path(f"data/usuarios/{usuario}/audios/{fecha}/{nombre}")
-    if path.exists():
-        return send_file(path, mimetype="audio/wav")
+@app.route('/api/nuevo_codigo', methods=['POST'])
+def nuevo_codigo():
+    codigo = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+    if codigos_path.exists():
+        with open(codigos_path, 'r', encoding='utf-8') as f:
+            codigos = json.load(f)
     else:
-        return jsonify({"error": "Audio no encontrado"}), 404
+        codigos = []
+    nuevo_id = f"codigo_{int(datetime.now().timestamp())}"
+    codigos.append({"id": nuevo_id, "code": codigo, "status": "disponible"})
+    with open(codigos_path, 'w', encoding='utf-8') as f:
+        json.dump(sorted(codigos, key=lambda x: x["code"]), f, indent=2, ensure_ascii=False)
+    return {"id": nuevo_id, "code": codigo, "status": "disponible"}
 
+@app.route('/api/actualizar_codigo', methods=['POST'])
+def actualizar_codigo():
+    data = request.get_json()
+    code_actualizar = data.get("code")
+    nuevo_status = data.get("status")  # "usado", "disponible", etc.
+    usuario = data.get("username", "")  # Usa username para coherencia
+    if codigos_path.exists():
+        with open(codigos_path, 'r', encoding='utf-8') as f:
+            codigos = json.load(f)
+    else:
+        codigos = []
+    for code_obj in codigos:
+        if code_obj["code"] == code_actualizar:
+            code_obj["status"] = nuevo_status
+            if nuevo_status == "usado" and usuario:
+                code_obj["usuario"] = usuario
+            elif nuevo_status == "disponible" and "usuario" in code_obj:
+                del code_obj["usuario"]
+            break
+    with open(codigos_path, 'w', encoding='utf-8') as f:
+        json.dump(sorted(codigos, key=lambda x: x["code"]), f, indent=2, ensure_ascii=False)
+    return {"mensaje": "Estado actualizado"}
 
-@app.route("/usuarios")
-def listar_usuarios():
-    base = Path("data/usuarios")
-    if not base.exists():
-        return jsonify([])
+@app.route('/api/codigos', methods=['GET'])
+def codigos():
+    # Devuelve los códigos como objeto: { "nombre": "CODE1234", ... }
+    if codigos_path.exists():
+        with open(codigos_path, 'r', encoding='utf-8') as f:
+            codigos = json.load(f)
+    else:
+        codigos = []
+    data = {}
+    for code_obj in codigos:
+        # Si ya tiene usuario registrado, usa el username como clave
+        if code_obj["status"] == "usado" and "usuario" in code_obj:
+            data[code_obj["usuario"]] = code_obj["code"]
+        else:
+            data[code_obj["id"]] = code_obj["code"]
+    return data
 
-    lista = []
-    for usuario in base.iterdir():
-        if usuario.is_dir():
-            total_size = sum(f.stat().st_size for f in usuario.rglob("*") if f.is_file())
-            diarios = sum(1 for f in (usuario / "diarios").glob("*.jsonl")) if (usuario / "diarios").exists() else 0
-            audios = sum(1 for f in (usuario / "audios").rglob("*.wav")) if (usuario / "audios").exists() else 0
-            lista.append({
-                "nombre": usuario.name,
-                "diarios": diarios,
-                "audios": audios,
-                "peso": round(total_size / 1024 / 1024, 2)
-            })
-    return jsonify(lista)
+@app.route('/api/usuarios', methods=['GET'])
+def api_usuarios():
+    # Devuelve la lista de usuarios según tu estructura esperada
+    if usuarios_path.exists():
+        with open(usuarios_path, 'r', encoding='utf-8') as f:
+            usuarios = json.load(f)
+    else:
+        usuarios = []
+    return jsonify({"usuarios": usuarios})
 
+@app.route("/api/registrar_usuario", methods=["POST"])
+def registrar_usuario():
+    data = request.get_json()
+    name = data.get("name", "")
+    username = data.get("username", "")
+    code = data.get("code", "")
+    weight = data.get("weight", 0)
+    date = data.get("date", datetime.now().strftime("%Y-%m-%d"))
+    if not name or not username or not code:
+        return jsonify({"error": "Faltan datos"}), 400
+    if usuarios_path.exists():
+        with open(usuarios_path, 'r', encoding='utf-8') as f:
+            usuarios = json.load(f)
+    else:
+        usuarios = []
+    user_id = f"user-{len(usuarios)+1}"
+    usuarios.append({
+        "id": user_id,
+        "name": name,
+        "username": username,
+        "code": code,
+        "weight": weight,
+        "date": date
+    })
+    with open(usuarios_path, 'w', encoding='utf-8') as f:
+        json.dump(usuarios, f, indent=2, ensure_ascii=False)
+    return jsonify({"mensaje": "Usuario registrado", "user": user_id})
 
+# --- SERVICIO DEL FRONTEND ---
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
 def serve_react_app(path):
     return render_template("index.html")
 
+@app.route("/login", methods=["POST"])
+def login():
+    username = request.form.get("username", "").strip()
+    codigo = request.form.get("codigo", "").strip()
 
-@app.route('/api/nuevo_codigo', methods=['POST'])
-def nuevo_codigo():
-    # Generar un código aleatorio de 8 caracteres
-    codigo = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+    if not username or not codigo:
+        return "Faltan datos", 400
 
-    # Leer el archivo codigos.json
-    with open('codigos.json', 'r') as f:
-        codigos = json.load(f)
+    if codigos_path.exists():
+        with open(codigos_path, 'r', encoding='utf-8') as f:
+            codigos = json.load(f)
+    else:
+        return "No hay códigos generados", 400
 
-    # Agregar el nuevo código como libre
-    codigos.append({"codigo": codigo, "estado": "libre"})
+    for code_obj in codigos:
+        if code_obj["code"] == codigo:
+            if code_obj["status"] == "disponible" or (
+                code_obj["status"] == "usado" and code_obj.get("usuario") == username
+            ):
+                if code_obj["status"] == "disponible":
+                    code_obj["status"] = "usado"
+                    code_obj["usuario"] = username
+                    with open(codigos_path, 'w', encoding='utf-8') as f:
+                        json.dump(codigos, f, indent=2, ensure_ascii=False)
+                # RESPONDE JSON:
+                return jsonify({
+                    "id": username,
+                    "username": username,
+                    "name": username  # o cambia aquí si tienes el nombre completo en otro lado
+                }), 200
+            else:
+                return "Código ya está usado por otro usuario", 403
+    return "Código inválido", 403
 
-    # Guardar el archivo actualizado
-    with open('codigos.json', 'w') as f:
-        json.dump(codigos, f)
-
-    return {"codigo": codigo}
-
-@app.route('/api/codigos', methods=['GET'])
-def codigos():
-    with open('codigos.json', 'r') as f:
-        codigos = json.load(f)
-    return {"codigos": codigos}
-
-@app.route('/api/actualizar_codigo', methods=['POST'])
-def actualizar_codigo():
+@app.route('/api/eliminar_codigo', methods=['POST'])
+def eliminar_codigo():
     data = request.get_json()
-    codigo_actualizar = data.get("codigo")
-    nuevo_estado = data.get("estado")  # "usado", "libre", etc.
-
-    with open('codigos.json', 'r') as f:
-        codigos = json.load(f)
-
-    for codigo in codigos:
-        if codigo["codigo"] == codigo_actualizar:
-            codigo["estado"] = nuevo_estado
-            break
-
-    with open('codigos.json', 'w', encoding='utf-8') as f:
+    id_a_eliminar = data.get("id")
+    if codigos_path.exists():
+        with open(codigos_path, 'r', encoding='utf-8') as f:
+            codigos = json.load(f)
+    else:
+        return {"error": "No hay codigos"}, 404
+    codigos = [c for c in codigos if c["id"] != id_a_eliminar]
+    with open(codigos_path, 'w', encoding='utf-8') as f:
         json.dump(codigos, f, indent=2, ensure_ascii=False)
+    return {"mensaje": "Código eliminado"}
 
-    return {"mensaje": "Estado actualizado"}
+@app.route('/api/eliminar_usuario', methods=['POST'])
+def eliminar_usuario():
+    data = request.get_json()
+    id_a_eliminar = data.get("id")
+    if usuarios_path.exists():
+        with open(usuarios_path, 'r', encoding='utf-8') as f:
+            usuarios = json.load(f)
+    else:
+        return {"error": "No hay usuarios"}, 404
+    usuarios = [u for u in usuarios if u["id"] != id_a_eliminar]
+    with open(usuarios_path, 'w', encoding='utf-8') as f:
+        json.dump(usuarios, f, indent=2, ensure_ascii=False)
+    return {"mensaje": "Usuario eliminado"}
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
